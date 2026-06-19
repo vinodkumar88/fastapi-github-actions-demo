@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app
+  namespace: prod
+  labels:
+    app: fastapi-app
+    env: prod
+spec:
+  replicas: 2                  # 2 replicas for zero-downtime rolling updates
+  selector:
+    matchLabels:
+      app: fastapi-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0        # never take a pod down before a new one is ready
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+        env: prod
+    spec:
+      containers:
+        - name: fastapi-app
+          image: ghcr.io/vinodkumar88/fastapi-github-actions-demo:prod
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: APP_ENV
+              value: "prod"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
