@@ -1,17 +1,27 @@
-# Deploys to the 'test' K8s namespace automatically on push to test branch
+# Deploys to the 'test' K8s namespace — ONLY after CI completes successfully.
 name: Deploy to Test
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
     branches: [test]
+    types: [completed]
 
 concurrency:
   group: deploy-test
   cancel-in-progress: true
 
 jobs:
+  check-ci:
+    name: Check CI passed
+    runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - run: echo "CI passed — proceeding with deploy"
+
   deploy:
     name: Deploy → test namespace
+    needs: check-ci
     runs-on: self-hosted
     environment: test
     permissions:

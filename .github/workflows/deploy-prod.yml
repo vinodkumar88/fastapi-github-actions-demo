@@ -1,19 +1,27 @@
-# Deploys to prod namespace — PAUSES for manual approval in GitHub UI
-# Set up: Repo → Settings → Environments → prod → Required reviewers → add yourself
+# Deploys to prod namespace — ONLY after CI passes, then PAUSES for manual approval.
 name: Deploy to Prod
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
     branches: [prod]
+    types: [completed]
 
-# Never cancel a running prod deploy
 concurrency:
   group: deploy-prod
   cancel-in-progress: false
 
 jobs:
+  check-ci:
+    name: Check CI passed
+    runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - run: echo "CI passed — proceeding with deploy"
+
   deploy:
     name: Deploy → prod namespace
+    needs: check-ci
     runs-on: self-hosted
     # This line is what triggers the approval gate.
     # Without a click in GitHub UI this job will sit and wait (up to 30 days).
