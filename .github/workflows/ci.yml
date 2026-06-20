@@ -1,0 +1,52 @@
+# Runs on every push to any branch and on all PRs
+# Stages: lint → build Docker image → push to GHCR with commit SHA tag
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [dev, test, prod]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: self-hosted        # your VM is the runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install ruff
+
+      - name: Run ruff linter
+        run: ruff check app/
+
+  build-and-push:
+    name: Build & push image
+    runs-on: self-hosted
+    needs: lint                 # only runs when lint passes
+    permissions:
+      contents: read
+      packages: write           # needed to push to GHCR
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (tagged with commit SHA)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
