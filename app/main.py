@@ -12,3 +12,7 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok", "env": ENV}
+
+@app.get("/items")
+def get_items():
+    return {"items": ["laptop", "keyboard", "monitor"], "env": ENV}
