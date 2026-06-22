@@ -1,31 +1,71 @@
-# Deploys to prod namespace — ONLY after CI passes, then PAUSES for manual approval.
+# Production pipeline — single workflow file.
+# Runs CI first, then waits for manual approval, then deploys.
+# Using push trigger (not workflow_run) so the branch context is always 'prod',
+# which satisfies the environment protection rule.
 name: Deploy to Prod
 
 on:
-  workflow_run:
-    workflows: ["CI"]
+  push:
     branches: [prod]
-    types: [completed]
 
 concurrency:
   group: deploy-prod
   cancel-in-progress: false
 
 jobs:
-  check-ci:
-    name: Check CI passed
+  # ── 1. Lint ────────────────────────────────────────────────
+  lint:
+    name: Lint
     runs-on: self-hosted
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - run: echo "CI passed — proceeding with deploy"
+      - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run linter
+        run: ruff check app/
+
+  # ── 2. Build & push image ──────────────────────────────────
+  build-and-push:
+    name: Build & push image
+    runs-on: self-hosted
+    needs: lint
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (SHA tag)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  # ── 3. Deploy to prod (approval gate fires here) ───────────
+  # GitHub pauses this job and emails the required reviewer.
+  # The job runs in the context of the 'prod' branch push,
+  # so the environment protection rule is satisfied.
   deploy:
     name: Deploy → prod namespace
-    needs: check-ci
     runs-on: self-hosted
-    # This line is what triggers the approval gate.
-    # Without a click in GitHub UI this job will sit and wait (up to 30 days).
-    environment: prod
+    needs: build-and-push        # image must exist before we deploy
+    environment: prod            # ← triggers approval gate
     permissions:
       contents: read
       packages: write
@@ -64,11 +104,12 @@ jobs:
 
       - name: Write deployment summary
         run: |
-          echo "### Production deploy complete" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Production deploy complete" >> $GITHUB_STEP_SUMMARY
           echo "Deployed by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Time: $(date -u)" >> $GITHUB_STEP_SUMMARY
 
+  # ── 4. Auto-rollback if smoke test fails ──────────────────
   rollback-on-failure:
     name: Rollback if smoke test fails
     runs-on: self-hosted
@@ -77,6 +118,6 @@ jobs:
     steps:
       - name: Roll back deployment
         run: |
-          echo "Smoke test failed — rolling back prod deployment"
+          echo "Smoke test failed — rolling back prod"
           kubectl rollout undo deployment/fastapi-app -n prod
           kubectl rollout status deployment/fastapi-app -n prod --timeout=120s
