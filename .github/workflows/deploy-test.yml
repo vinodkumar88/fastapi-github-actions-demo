@@ -1,28 +1,66 @@
-# Deploys to the 'test' K8s namespace — ONLY after CI completes successfully.
+# Test/staging pipeline — single workflow file (CI + deploy in one).
+# Triggered on every push to test branch.
+# Auto-deploys after lint + build — no approval gate for test.
 name: Deploy to Test
 
 on:
-  workflow_run:
-    workflows: ["CI"]
+  push:
     branches: [test]
-    types: [completed]
 
 concurrency:
   group: deploy-test
   cancel-in-progress: true
 
 jobs:
-  check-ci:
-    name: Check CI passed
+  # ── 1. Lint ────────────────────────────────────────────────
+  lint:
+    name: Lint
     runs-on: self-hosted
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - run: echo "CI passed — proceeding with deploy"
+      - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run linter
+        run: ruff check app/
+
+  # ── 2. Build & push image ──────────────────────────────────
+  build-and-push:
+    name: Build & push image
+    runs-on: self-hosted
+    needs: lint
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (SHA tag)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  # ── 3. Deploy to test (auto — no approval gate) ────────────
   deploy:
     name: Deploy → test namespace
-    needs: check-ci
     runs-on: self-hosted
+    needs: build-and-push
     environment: test
     permissions:
       contents: read
@@ -58,4 +96,10 @@ jobs:
         run: |
           sleep 5
           curl -sf http://localhost:30082/health | grep '"status":"ok"'
-          echo "Test smoke test passed"
+          echo "Test smoke test passed ✅"
+
+      - name: Write deployment summary
+        run: |
+          echo "### Test deploy complete" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Time: $(date -u)" >> $GITHUB_STEP_SUMMARY
