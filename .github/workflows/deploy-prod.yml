@@ -1,4 +1,5 @@
 # Production pipeline — single workflow file.
+#
 # Runs CI first, then waits for manual approval, then deploys.
 # Using push trigger (not workflow_run) so the branch context is always 'prod',
 # which satisfies the environment protection rule.
